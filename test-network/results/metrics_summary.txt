@@ -1,0 +1,22 @@
+=================================================================
+Metric                              Baseline        Proposed
+=================================================================
+Jain Fairness Index                   0.3877          0.9137
+Gini Coefficient                      0.6392          0.1707
+Shannon Entropy (bits)                4.5515          5.5624
+Normalized Entropy                    0.8065          0.9856
+Nakamoto Coefficient                       8              20
+HHI                                   0.0516          0.0219
+Coeff. of Variation                   0.8683          0.3073
+Max Load Ratio                        5.2250          1.6250
+Starvation Count                          16               0
+Validator Rotation                    0.0670          0.9740
+Avg Latency (ms)                   2142.3015       2161.0435
+Latency Std Dev (ms)                 45.3563         51.8591
+=================================================================
+
+Mann-Whitney U p-value: 3.915945e-02
+
+Baseline transactions: 2000
+Proposed transactions: 2000
+Total validators registered: 50
