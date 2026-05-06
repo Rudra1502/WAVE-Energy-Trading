@@ -72,8 +72,8 @@ We have packaged the entire experiment into a standalone repository. You do not 
 ### Step 1: Clone the Repository & Download Fabric Binaries
 ```bash
 # 1. Clone this repository
-git clone https://github.com/YourUsername/YourRepositoryName.git
-cd YourRepositoryName
+git clone https://github.com/Rudra1502/WAVE-Energy-Trading.git
+cd WAVE-Energy-Trading
 
 # 2. Download official Hyperledger Fabric binaries (v2.5.0) and Docker images
 # (The -s flag skips downloading the bloated fabric-samples repo, as our code is self-contained)
