@@ -64,6 +64,15 @@ BASELINE_END=$(date +%s)
 BASELINE_TIME=$((BASELINE_END - BASELINE_START))
 echo "Baseline done in ${BASELINE_TIME}s"
 
+echo "Finalizing last block for baseline..."
+peer chaincode invoke -o localhost:7050 \
+--ordererTLSHostnameOverride orderer.example.com \
+--tls --cafile "$ORDERER_CA" \
+--waitForEvent \
+-C mychannel -n v2v \
+-c '{"function":"finalizeCurrentBlock","Args":[]}' \
+> /dev/null 2>&1 || true
+
 echo ""
 echo "[4/6] Resetting all validators for clean proposed run..."
 peer chaincode invoke -o localhost:7050 \
@@ -86,6 +95,15 @@ cd ..
 PROPOSED_END=$(date +%s)
 PROPOSED_TIME=$((PROPOSED_END - PROPOSED_START))
 echo "Proposed done in ${PROPOSED_TIME}s"
+
+echo "Finalizing last block for proposed..."
+peer chaincode invoke -o localhost:7050 \
+--ordererTLSHostnameOverride orderer.example.com \
+--tls --cafile "$ORDERER_CA" \
+--waitForEvent \
+-C mychannel -n v2v \
+-c '{"function":"finalizeCurrentBlock","Args":[]}' \
+> /dev/null 2>&1 || true
 
 echo ""
 echo "[6/6] Running analysis..."
