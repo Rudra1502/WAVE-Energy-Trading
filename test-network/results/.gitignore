@@ -1,2 +1,13 @@
+# Python artifacts
 venv/
 __pycache__/
+*.pyc
+
+# Experiment output files (generated when researchers run experiments)
+baseline_log.txt
+proposed_log.txt
+experiment_log.txt
+metrics_summary.txt
+
+# Generated graphs (produced by analyze.py)
+*.png
