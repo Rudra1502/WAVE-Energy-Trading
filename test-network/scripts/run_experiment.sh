@@ -43,20 +43,22 @@ do
         SIM_LATENCY="0.${LATENCY_INT}"
     fi
 
+    PAYLOAD_JSON="{\"function\":\"completeTransaction\",\"Args\":[\"$BUYER\",\"$SELLER\",\"$SUCCESS\",\"$SIM_LATENCY\",\"$MODE\"]}"
+
     RESULT=$(peer chaincode invoke -o localhost:7050 \
     --ordererTLSHostnameOverride orderer.example.com \
     --tls --cafile "$ORDERER_CA" \
     --waitForEvent \
     -C mychannel -n v2v \
-    -c "{\"function\":\"completeTransaction\",\"Args\":[\"$BUYER\",\"$SELLER\",\"$SUCCESS\",\"$SIM_LATENCY\",\"$MODE\"]}" \
+    -c "$PAYLOAD_JSON" \
     2>&1)
 
     END=$(date +%s%3N)
     LATENCY=$((END - START))
 
-    PAYLOAD=$(echo "$RESULT" | sed -n 's/.*payload:"\(.*\)".*/\1/p')
-    CLEAN=$(echo "$PAYLOAD" | sed 's/\\"/"/g')
-    VALIDATOR=$(echo "$CLEAN" | sed -n 's/.*validatorUsed":"\([^"]*\)".*/\1/p')
+    PAYLOAD=$(echo "$RESULT" | sed -n 's/.*payload:\x22\(.*\)\x22.*/\1/p')
+    CLEAN=$(echo "$PAYLOAD" | tr -d '\\')
+    VALIDATOR=$(echo "$CLEAN" | sed -n 's/.*validatorUsed\x22:\x22\([^\x22]*\)\x22.*/\1/p')
 
     echo "Tx $i | Validator: $VALIDATOR | Latency(ms): $LATENCY" >> "$OUTPUT_FILE"
 done

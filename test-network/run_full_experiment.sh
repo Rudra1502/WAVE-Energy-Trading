@@ -108,8 +108,10 @@ peer chaincode invoke -o localhost:7050 \
 echo ""
 echo "[6/6] Running analysis..."
 cd results
-if [ -d "venv" ]; then
+if [ -f "venv/bin/activate" ]; then
     source venv/bin/activate
+elif [ -f "venv/Scripts/activate" ]; then
+    source venv/Scripts/activate
 fi
 python3 analyze.py
 cd ..
