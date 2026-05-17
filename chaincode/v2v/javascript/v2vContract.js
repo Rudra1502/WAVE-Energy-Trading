@@ -65,7 +65,12 @@ class V2VContract extends Contract {
         return JSON.stringify(validator);
     }
 
-    async updateValidatorMetrics(ctx, validatorId, latency, isCorrect) {
+    // ==============================
+    // Block-level validator metrics update
+    // Updates stats from block aggregate data, then computes
+    // reputation using the validator's own avgLatency & successRate
+    // ==============================
+    async updateValidatorForBlock(ctx, validatorId, blockTxCount, blockTotalLatency, blockSuccessCount) {
 
         const key = getValidatorKey(validatorId);
         const data = await ctx.stub.getState(key);
@@ -76,77 +81,61 @@ class V2VContract extends Contract {
 
         const validator = JSON.parse(data.toString());
 
-        const latencyVal = parseFloat(latency);
-
-        // ✅ normalize latency
-        const latencyScore = 1 / (1 + latencyVal);
-
-        // ✅ robust boolean handling
-        const isValid = (isCorrect === true || isCorrect === "true");
-
-        const correctnessScore = isValid ? 1 : -1;
-
         // ==============================
-        // UPDATE STATS FIRST
+        // UPDATE STATS FROM BLOCK DATA
         // ==============================
-        validator.totalValidations += 1;
-
-        if (isValid) {
-            validator.successfulValidations += 1;
-        }
+        const prevValidations = validator.totalValidations;
+        validator.totalValidations += blockTxCount;
+        validator.successfulValidations += blockSuccessCount;
 
         // ✅ success rate update
         validator.successRate =
             validator.successfulValidations / validator.totalValidations;
 
-        // ==============================
-        // LATENCY TRACKING
-        // ==============================
-
-        // moving average latency
+        // ✅ average latency (weighted rolling average)
         validator.avgLatency =
-            (validator.avgLatency * (validator.totalValidations - 1) + latencyVal)
+            (validator.avgLatency * prevValidations + blockTotalLatency)
             / validator.totalValidations;
 
-        validator.lastLatency = latencyVal;
+        validator.lastLatency = blockTotalLatency / blockTxCount;
 
         // ==============================
-        // PARTICIPATION SCORE
+        // COMPUTE REPUTATION USING VALIDATOR'S OWN METRICS
         // ==============================
-        const participationScore = validator.successRate;
+        const blockSuccessRate = blockSuccessCount / blockTxCount;
 
-        // ==============================
-        // WEIGHTS
-        // ==============================
+        const latencyScore = 1 / (1 + validator.avgLatency);
+        const correctnessScore = blockSuccessRate;         // Immediate block performance: map [0,1]
+        const participationScore = validator.successRate;  // Historical performance
+
         const alpha = 0.5;  // correctness
-        const beta = 0.3;   // latency
+        const beta  = 0.3;  // latency
         const gamma = 0.2;  // participation
 
         const reward =
             alpha * correctnessScore +
-            beta * latencyScore +
+            beta  * latencyScore +
             gamma * participationScore;
 
         // ==============================
         // DYNAMIC REPUTATION UPDATE
         // ==============================
-
         validator.reputation =
             0.7 * validator.reputation + 0.3 * reward;
 
-        // Optional: clamp reputation (recommended)
+        // Clamp reputation
         if (validator.reputation > 1) validator.reputation = 1;
         if (validator.reputation < -1) validator.reputation = -1;
 
         await ctx.stub.putState(key, Buffer.from(JSON.stringify(validator)));
 
-        return JSON.stringify({
+        return {
             validatorId,
             reward,
             updatedReputation: validator.reputation,
             successRate: validator.successRate,
             avgLatency: validator.avgLatency
-        });
+        };
     }
 
     async selectValidator(ctx, mode) {
@@ -164,21 +153,8 @@ class V2VContract extends Contract {
                 const val = JSON.parse(res.value.value.toString());
 
                 const reputation = val.reputation || 0;
-                const successRate = val.successRate || 0;
-                const avgLatency = val.avgLatency || 1;
 
-                const latencyScore = 1 / (1 + avgLatency);
-
-                const alpha = 0.5;
-                const beta = 0.3;
-                const gamma = 0.2;
-
-                const score =
-                    alpha * reputation +
-                    beta * successRate +
-                    gamma * latencyScore;
-
-                val.score = score > 0 ? score : 0.05; // avoid zero
+                val.score = reputation > 0 ? reputation : 0.05; // avoid zero
                 validators.push(val);
             }
 
@@ -325,65 +301,190 @@ class V2VContract extends Contract {
 
     async validateTransaction(ctx, validatorId, latency, isCorrect) {
 
-        // 🔥 call your incentive logic
-        return await this.updateValidatorMetrics(ctx, validatorId, latency, isCorrect);
+        // 🔥 single-tx wrapper (for standalone calls)
+        const latencyVal = parseFloat(latency);
+        const isValid = (isCorrect === true || isCorrect === "true");
+        const result = await this.updateValidatorForBlock(
+            ctx, validatorId, 1, latencyVal, isValid ? 1 : 0
+        );
+        return JSON.stringify(result);
     }
 
     async completeTransaction(ctx, buyerId, sellerId, success, latency, mode) {
 
-    // ==============================
-    // STEP 0: Normalize input
-    // ==============================
-    const isValid = (success === true || success === "true");
-    const latencyVal = parseFloat(latency);
-    if (!mode) mode = "proposed";
+        const BLOCK_SIZE = 20;
+        const BLOCK_KEY = 'CURRENT_BLOCK';
 
-    // ==============================
-    // STEP 1: Select best validator
-    // ==============================
-    const selectedValidator = JSON.parse(await this.selectValidator(ctx, mode));
+        // ==============================
+        // STEP 0: Normalize input
+        // ==============================
+        const isValid = (success === true || success === "true");
+        const latencyVal = parseFloat(latency);
+        if (!mode) mode = "proposed";
 
-    if (!selectedValidator) {
-        throw new Error("No validator available");
+        // ==============================
+        // STEP 1: Load current block state
+        // ==============================
+        let blockState = null;
+        const blockBytes = await ctx.stub.getState(BLOCK_KEY);
+        if (blockBytes && blockBytes.length > 0) {
+            blockState = JSON.parse(blockBytes.toString());
+        }
+
+        let selectedValidator;
+        let blockFinalized = null; // stores previous block summary if finalized
+
+        // ==============================
+        // STEP 2: Check if new block needed
+        // ==============================
+        if (!blockState || blockState.txCount >= BLOCK_SIZE) {
+
+            // 🔶 Finalize previous block: update validator using its own metrics
+            if (blockState && blockState.validatorId) {
+                const result = await this.updateValidatorForBlock(
+                    ctx,
+                    blockState.validatorId,
+                    blockState.txCount,
+                    blockState.totalLatency,
+                    blockState.successCount
+                );
+
+                // Store block record on ledger
+                const blockRecord = {
+                    type: 'BLOCK_RECORD',
+                    blockNumber: blockState.blockNumber,
+                    validatorId: blockState.validatorId,
+                    txCount: blockState.txCount,
+                    blockAvgLatency: blockState.totalLatency / blockState.txCount,
+                    blockSuccessRate: blockState.successCount / blockState.txCount,
+                    validatorReputation: result.updatedReputation,
+                    validatorSuccessRate: result.successRate,
+                    validatorAvgLatency: result.avgLatency,
+                    timestamp: new Date().toISOString()
+                };
+                await ctx.stub.putState(
+                    `BLOCK_${blockState.blockNumber}`,
+                    Buffer.from(JSON.stringify(blockRecord))
+                );
+
+                blockFinalized = blockRecord;
+            }
+
+            // 🟢 Select new validator (leader) for this block
+            selectedValidator = JSON.parse(await this.selectValidator(ctx, mode));
+
+            if (!selectedValidator) {
+                throw new Error("No validator available");
+            }
+
+            // Initialize new block state
+            blockState = {
+                blockNumber: blockFinalized ? blockFinalized.blockNumber + 1 : 1,
+                validatorId: selectedValidator.id,
+                txCount: 0,
+                totalLatency: 0,
+                successCount: 0,
+                failCount: 0
+            };
+
+        } else {
+            // 🔁 Reuse current block's validator
+            const validatorKey = getValidatorKey(blockState.validatorId);
+            const valBytes = await ctx.stub.getState(validatorKey);
+            selectedValidator = JSON.parse(valBytes.toString());
+        }
+
+        // ==============================
+        // STEP 3: Finalize trade (buyer/seller)
+        // ==============================
+        await this.finalizeTrade(ctx, buyerId, sellerId, isValid);
+
+        // ==============================
+        // STEP 4: Accumulate block metrics
+        // ==============================
+        blockState.txCount += 1;
+        blockState.totalLatency += latencyVal;
+        if (isValid) {
+            blockState.successCount += 1;
+        } else {
+            blockState.failCount += 1;
+        }
+
+        // Save block state
+        await ctx.stub.putState(BLOCK_KEY, Buffer.from(JSON.stringify(blockState)));
+
+        // ==============================
+        // STEP 5: Return block-wise results
+        // ==============================
+        const response = {
+            message: "Transaction completed",
+            validatorUsed: selectedValidator.id,
+            blockNumber: blockState.blockNumber,
+            txInBlock: blockState.txCount
+        };
+
+        // Include previous block summary if one was just finalized
+        if (blockFinalized) {
+            response.finalizedBlock = blockFinalized;
+        }
+
+        return JSON.stringify(response);
     }
 
     // ==============================
-    // STEP 2: Finalize trade
+    // Finalize the last (possibly incomplete) block
+    // Call this at the end of an experiment run
     // ==============================
-    await this.finalizeTrade(ctx, buyerId, sellerId, isValid);
+    async finalizeCurrentBlock(ctx) {
 
-    // ==============================
-    // STEP 3: Update validator metrics
-    // ==============================
-    await this.updateValidatorMetrics(
-        ctx,
-        selectedValidator.id,
-        latencyVal,
-        isValid
-    );
+        const BLOCK_KEY = 'CURRENT_BLOCK';
+        const blockBytes = await ctx.stub.getState(BLOCK_KEY);
 
-    // ==============================
-    // STEP 4: Store transaction
-    // ==============================
-    const txId = ctx.stub.getTxID();
+        if (!blockBytes || blockBytes.length === 0) {
+            return JSON.stringify({ message: "No active block to finalize" });
+        }
 
-    const txRecord = {
-        txId,
-        buyerId,
-        sellerId,
-        validator: selectedValidator.id,
-        latency: latencyVal,
-        success: isValid,
-        timestamp: new Date().toISOString()
-    };
+        const blockState = JSON.parse(blockBytes.toString());
 
-    await ctx.stub.putState(txId, Buffer.from(JSON.stringify(txRecord)));
+        if (blockState.txCount === 0) {
+            return JSON.stringify({ message: "Block is empty, nothing to finalize" });
+        }
 
-    return JSON.stringify({
-        message: "Transaction completed",
-        validatorUsed: selectedValidator.id
-    });
-}
+        // Update validator using its own avgLatency & successRate
+        const result = await this.updateValidatorForBlock(
+            ctx,
+            blockState.validatorId,
+            blockState.txCount,
+            blockState.totalLatency,
+            blockState.successCount
+        );
+
+        // Store block record on ledger
+        const blockRecord = {
+            type: 'BLOCK_RECORD',
+            blockNumber: blockState.blockNumber,
+            validatorId: blockState.validatorId,
+            txCount: blockState.txCount,
+            blockAvgLatency: blockState.totalLatency / blockState.txCount,
+            blockSuccessRate: blockState.successCount / blockState.txCount,
+            validatorReputation: result.updatedReputation,
+            validatorSuccessRate: result.successRate,
+            validatorAvgLatency: result.avgLatency,
+            timestamp: new Date().toISOString()
+        };
+        await ctx.stub.putState(
+            `BLOCK_${blockState.blockNumber}`,
+            Buffer.from(JSON.stringify(blockRecord))
+        );
+
+        // Clear block state
+        await ctx.stub.deleteState(BLOCK_KEY);
+
+        return JSON.stringify({
+            message: `Finalized block ${blockState.blockNumber}`,
+            blockRecord
+        });
+    }
 
     async getAllValidators(ctx) {
 
@@ -428,7 +529,10 @@ class V2VContract extends Contract {
             res = await iterator.next();
         }
 
-        return JSON.stringify({ message: `Reset ${count} validators` });
+        // Also clear block state
+        await ctx.stub.deleteState('CURRENT_BLOCK');
+
+        return JSON.stringify({ message: `Reset ${count} validators and block state` });
     }
 
     // async getAllPlans(ctx) {
