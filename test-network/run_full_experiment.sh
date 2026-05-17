@@ -121,3 +121,8 @@ echo "  Baseline: ${BASELINE_TIME}s"
 echo "  Proposed: ${PROPOSED_TIME}s"
 echo "  Results in: test-network/results/"
 echo "============================================"
+
+echo ""
+echo "Opening log files..."
+start results/baseline_log.txt 2>/dev/null || xdg-open results/baseline_log.txt 2>/dev/null &
+start results/proposed_log.txt 2>/dev/null || xdg-open results/proposed_log.txt 2>/dev/null &

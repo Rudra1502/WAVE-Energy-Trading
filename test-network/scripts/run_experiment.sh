@@ -13,7 +13,7 @@ OUTPUT_FILE="${RESULTS_DIR}/${MODE}_log.txt"
 mkdir -p "$RESULTS_DIR"
 > "$OUTPUT_FILE"
 
-echo "Running experiment: MODE=$MODE | NUM_TX=$NUM_TX" | tee -a "$OUTPUT_FILE"
+echo "Running experiment: MODE=$MODE | NUM_TX=$NUM_TX" >> "$OUTPUT_FILE"
 
 for ((i=1; i<=NUM_TX; i++))
 do
@@ -58,7 +58,7 @@ do
     CLEAN=$(echo "$PAYLOAD" | sed 's/\\"/"/g')
     VALIDATOR=$(echo "$CLEAN" | sed -n 's/.*validatorUsed":"\([^"]*\)".*/\1/p')
 
-    echo "Tx $i | Validator: $VALIDATOR | Latency(ms): $LATENCY" | tee -a "$OUTPUT_FILE"
+    echo "Tx $i | Validator: $VALIDATOR | Latency(ms): $LATENCY" >> "$OUTPUT_FILE"
 done
 
 echo "Experiment $MODE completed! Results: $OUTPUT_FILE"
